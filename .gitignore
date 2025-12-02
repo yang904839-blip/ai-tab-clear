@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Build artifacts
+dist/
+build/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Agent artifacts (optional - uncomment if you don't want to track)
+.gemini/
+
+# Extension development
+*.pem
+*.crx
+*.zip
+
+# Local environment
+.env
+.env.local

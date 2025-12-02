@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Tab Clear1</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header with pause/resume button -->
+    <div class="header">
+      <div class="header-actions">
+        <select id="languageSelect" class="language-select">
+          <option value="zh_CN">简体中文</option>
+          <option value="zh_TW">繁體中文</option>
+          <option value="en">English</option>
+          <option value="ja">日本語</option>
+          <option value="ko">한국어</option>
+          <option value="de">Deutsch</option>
+          <option value="fr">Français</option>
+          <option value="es">Español</option>
+          <option value="it">Italiano</option>
+        </select>
+        <button id="themeBtn" class="theme-btn" title="切换主题">
+          <span class="theme-icon">🌙</span>
+        </button>
+        <button id="pauseBtn" class="pause-btn">
+          <span class="pause-icon">⏸</span>
+          <span class="pause-text">暂停</span>
+        </button>
+      </div>
+    </div>
+    <div class="tab-nav">
+      <button class="tab-btn active" data-tab="history" data-i18n="tab_history">历史</button>
+      <button class="tab-btn" data-tab="settings" data-i18n="tab_settings">设置</button>
+    </div>
+
+    <!-- History Tab Content -->
+    <div class="tab-content active" id="historyTab">
+      <div class="history-header">
+        <div class="history-stats">
+          <span id="closedCount">0</span> <span data-i18n="history_closed_count">个已关闭</span>
+        </div>
+        <div class="history-actions">
+          <button id="groupNowBtn" class="icon-btn" title="立即重新分组" data-i18n="btn_group_now" data-i18n-attr="title">⚡️</button>
+          <button id="clearHistoryBtn" class="text-btn" data-i18n="btn_clear_history">清空历史</button>
+        </div>
+      </div>
+      <div class="history-search">
+        <input type="text" id="historySearchInput" placeholder="搜索标题或网址..." data-i18n="placeholder_search" data-i18n-attr="placeholder">
+      </div>
+      <div id="historyList" class="history-list">
+        <!-- History items will be inserted here -->
+      </div>
+      <div id="emptyHistory" class="empty-history">
+        <div class="empty-icon">🗑️</div>
+        <div class="empty-text" data-i18n="msg_empty_history">暂无关闭记录</div>
+      </div>
+    </div>
+
+    <!-- Settings Tab Content -->
+    <div class="tab-content" id="settingsTab">
+      <div class="settings-form">
+        
+        <div class="card">
+          <div class="section-title" data-i18n="section_auto_close">⚙️ 自动关闭设置</div>
+          
+          <div class="form-group">
+            <label for="idleTime">
+              <span class="label-text" data-i18n="label_idle_time">闲置时间 (分钟)</span>
+              <span class="label-desc" data-i18n="desc_idle_time">标签页不活动多久后自动关闭</span>
+            </label>
+            <input type="number" id="idleTime" min="1" value="30">
+          </div>
+
+          <div class="form-group">
+            <label for="minTabCount">
+              <span class="label-text" data-i18n="label_min_tab_count">最少保留标签数</span>
+              <span class="label-desc" data-i18n="desc_min_tab_count">只有当标签页总数超过此值时才开始清理</span>
+            </label>
+            <input type="number" id="minTabCount" min="1" value="10">
+          </div>
+
+          <div class="form-group">
+            <div class="toggle-label">
+              <div class="toggle-text">
+                <span class="label-text" data-i18n="label_duplicate_domains">清理重复域名</span>
+                <span class="label-desc" data-i18n="desc_duplicate_domains">自动关闭同一域名的多余标签页 (保留最近3个)</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="closeDuplicateDomains" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <div class="toggle-label">
+              <div class="toggle-text">
+                <span class="label-text" data-i18n="label_native_tabs">清理原生标签页</span>
+                <span class="label-desc" data-i18n="desc_native_tabs">自动关闭闲置的 chrome:// 标签页</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="autoCloseNativeTabs" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="nativeTabIdleTime">
+              <span class="label-text" data-i18n="label_native_idle_time">原生标签闲置时间</span>
+            </label>
+            <input type="number" id="nativeTabIdleTime" min="1" value="30">
+          </div>
+
+          <div class="form-group">
+            <div class="toggle-label">
+              <div class="toggle-text">
+                <span class="label-text" data-i18n="label_protect_pinned">保护固定标签页</span>
+                <span class="label-desc" data-i18n="desc_protect_pinned">永远不关闭已固定的标签页</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="ignorePinnedTabs" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-title" data-i18n="section_history_settings">📜 历史记录设置</div>
+
+          <div class="form-group">
+            <label for="historyLimit">
+              <span class="label-text" data-i18n="label_history_limit">历史记录保留条数</span>
+              <span class="label-desc" data-i18n="desc_history_limit">设置保留的已关闭标签页数量</span>
+            </label>
+            <select id="historyLimit">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-title" data-i18n="section_grouping">📂 智能分组</div>
+
+          <div class="form-group">
+            <label for="groupingMethod">
+              <span class="label-text" data-i18n="label_grouping_method">分组方式</span>
+              <span class="label-desc" data-i18n="desc_grouping_method">选择用于分类标签页的算法</span>
+            </label>
+            <select id="groupingMethod">
+              <option value="local" data-i18n="option_local">本地算法 (快速/无需Key)</option>
+              <option value="ai" data-i18n="option_ai">AI 智能 (精准/需Key)</option>
+            </select>
+          </div>
+
+          <div id="aiConfigSection" style="display: none;">
+            <div class="form-group">
+              <div class="toggle-label">
+                <div class="toggle-text">
+                  <span class="label-text" data-i18n="label_enable_ai">启用 AI 服务</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="aiEnabled">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="aiProvider">
+                <span class="label-text" data-i18n="label_ai_provider">AI 服务提供商</span>
+              </label>
+              <select id="aiProvider">
+                <option value="gemini">Google Gemini</option>
+                <option value="openai">OpenAI (ChatGPT)</option>
+                <option value="grok">xAI (Grok)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="aiApiKey">
+                <span class="label-text" data-i18n="label_api_key">API Key</span>
+                <span class="label-desc" data-i18n="desc_api_key">请填写对应服务的 API Key</span>
+              </label>
+              <input type="password" id="aiApiKey" placeholder="sk-...">
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-title" data-i18n="section_rules">🛡️ 规则配置</div>
+
+          <div class="form-group">
+            <label for="whitelist">
+              <span class="label-text" data-i18n="label_whitelist">白名单 (永不关闭)</span>
+            </label>
+            <textarea id="whitelist" rows="3" placeholder="输入关键词，每行一个&#10;例如: google.com&#10;music" data-i18n="placeholder_whitelist" data-i18n-attr="placeholder"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="blacklist">
+              <span class="label-text" data-i18n="label_blacklist">黑名单 (立即关闭)</span>
+            </label>
+            <textarea id="blacklist" rows="3" placeholder="输入关键词，每行一个&#10;例如: facebook&#10;game" data-i18n="placeholder_blacklist" data-i18n-attr="placeholder"></textarea>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button id="saveBtn" class="primary-btn" data-i18n="btn_save">保存设置</button>
+        </div>
+        <div id="saveMessage" class="save-message"></div>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
