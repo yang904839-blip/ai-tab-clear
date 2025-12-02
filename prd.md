@@ -7,3 +7,7 @@
 5.防止记录重复的标签页
 6. 设置窗口加上一个按钮 可以暂停和继续这个功能
 7. ui现代化 精美 简约 大方
+8. 其他功能参考 
+![alt text](image-1.png)
+![alt text](image-2.png)
+![alt text](image-3.png)
