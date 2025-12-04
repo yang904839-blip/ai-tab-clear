@@ -203,7 +203,8 @@ async function saveToHistory(tab) {
 // Check and close idle tabs
 async function checkIdleTabs() {
   const { settings } = await chrome.storage.local.get('settings');
-  const currentSettings = settings || DEFAULT_SETTINGS;
+  // Merge with defaults to ensure all keys exist
+  const currentSettings = { ...DEFAULT_SETTINGS, ...settings };
   
   // Skip if paused
   if (currentSettings.isPaused) {
@@ -257,7 +258,7 @@ async function checkIdleTabs() {
   const markedTabIds = new Set();
   let currentTabCount = tabs.length;
   
-  // 1. Identify Native Tabs to close (Independent of minTabCount)
+  // 1. Identify Native Tabs to close
   if (currentSettings.autoCloseNativeTabs) {
     const nativeIdleThreshold = (currentSettings.nativeTabIdleTime || 30) * 60 * 1000;
     
@@ -272,10 +273,15 @@ async function checkIdleTabs() {
       const shouldSkipPinned = currentSettings.ignorePinnedTabs && tab.pinned;
       
       if (idleTime > nativeIdleThreshold && !tab.active && !tab.audible && !shouldSkipPinned) {
-        console.log(`Marking native tab for closing: ${tab.title}`);
-        tabsToClose.push(tab);
-        markedTabIds.add(tab.id);
-        currentTabCount--;
+        // Only close if we are above minTabCount
+        if (currentTabCount > currentSettings.minTabCount) {
+          console.log(`Marking native tab for closing: ${tab.title}`);
+          tabsToClose.push(tab);
+          markedTabIds.add(tab.id);
+          currentTabCount--;
+        } else {
+          console.log(`Keeping native tab to maintain min count (${currentSettings.minTabCount}): ${tab.title}`);
+        }
       }
     }
   }
@@ -367,6 +373,18 @@ async function checkIdleTabs() {
       currentTabCount--;
     } else {
       console.log(`Keeping idle tab to maintain min count (${currentSettings.minTabCount}):`, candidate.tab.title);
+    }
+  }
+  
+  // Safety Check: Ensure we don't close more than allowed
+  // This is a final safeguard in case logic above had gaps
+  const projectedCount = tabs.length - tabsToClose.length;
+  if (projectedCount < currentSettings.minTabCount) {
+    const overflow = currentSettings.minTabCount - projectedCount;
+    if (overflow > 0) {
+      console.warn(`Safety check: Removing ${overflow} tabs from close list to respect minTabCount.`);
+      // Remove from the end (regular idle tabs are added last)
+      tabsToClose.splice(-overflow);
     }
   }
   
