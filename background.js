@@ -200,6 +200,27 @@ async function saveToHistory(tab) {
   await chrome.storage.local.set({ closedTabs: trimmedHistory });
 }
 
+// Identify tab type for priority closing
+function getTabType(tab) {
+  const url = tab.url || '';
+  
+  // Empty tabs (new tab, about:blank)
+  if (url === 'chrome://newtab/' || 
+      url === 'about:blank' || 
+      url === '' ||
+      url === 'chrome://new-tab-page/') {
+    return 'empty';
+  }
+  
+  // Native tabs (chrome://)
+  if (url.startsWith('chrome://')) {
+    return 'native';
+  }
+  
+  // Regular web pages
+  return 'web';
+}
+
 // Check and close idle tabs
 async function checkIdleTabs() {
   const { settings } = await chrome.storage.local.get('settings');
@@ -218,180 +239,194 @@ async function checkIdleTabs() {
   const idleThreshold = currentSettings.idleTime * 60 * 1000; // Convert to milliseconds
   const resumeTime = currentSettings.resumeTime || 0;
   
-  // Group tabs by domain for duplicate detection
-  const domainGroups = {};
-  
+  // Group tabs by window
+  const windowGroups = {};
   for (const tab of tabs) {
-    // Skip special URLs
-    if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
-      continue;
+    const windowId = tab.windowId;
+    if (!windowGroups[windowId]) {
+      windowGroups[windowId] = [];
     }
-    
-    try {
-      const urlObj = new URL(tab.url);
-      const domain = urlObj.hostname;
-      
-      if (!domainGroups[domain]) {
-        domainGroups[domain] = [];
-      }
-      
-      // Use tab.lastAccessed or now if undefined (safety fallback)
-      // Also consider resumeTime
-      const effectiveLastActive = Math.max(tab.lastAccessed || now, resumeTime);
-      
-      domainGroups[domain].push({
-        tab,
-        lastActive: effectiveLastActive
-      });
-    } catch (e) {
-      // Invalid URL, skip
-      continue;
-    }
+    windowGroups[windowId].push(tab);
   }
   
-  // Regular idle time check
-  // We need to handle native tabs, duplicate domains, and regular tabs differently
-  // Native tabs are closed regardless of minTabCount
-  // Duplicate domains and Regular tabs are closed only if total count > minTabCount
-  
-  const tabsToClose = [];
-  const markedTabIds = new Set();
-  let currentTabCount = tabs.length;
-  
-  // 1. Identify Native Tabs to close
-  if (currentSettings.autoCloseNativeTabs) {
+  // Process each window independently
+  for (const windowId in windowGroups) {
+    const windowTabs = windowGroups[windowId];
+    let currentTabCount = windowTabs.length;
+    const tabsToClose = [];
+    
+    console.log(`Processing window ${windowId} with ${currentTabCount} tabs`);
+    
+    // Group tabs by domain for duplicate detection (within this window)
+    const domainGroups = {};
+    
+    for (const tab of windowTabs) {
+      // Skip special URLs
+      if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+        continue;
+      }
+      
+      try {
+        const urlObj = new URL(tab.url);
+        const domain = urlObj.hostname;
+        
+        if (!domainGroups[domain]) {
+          domainGroups[domain] = [];
+        }
+        
+        // Use tab.lastAccessed or now if undefined (safety fallback)
+        // Also consider resumeTime
+        const effectiveLastActive = Math.max(tab.lastAccessed || now, resumeTime);
+        
+        domainGroups[domain].push({
+          tab,
+          lastActive: effectiveLastActive
+        });
+      } catch (e) {
+        // Invalid URL, skip
+        continue;
+      }
+    }
+    
+    // Collect all candidate tabs for closing with priority
+    const candidates = [];
     const nativeIdleThreshold = (currentSettings.nativeTabIdleTime || 30) * 60 * 1000;
     
-    for (const tab of tabs) {
-      const isNativeTab = tab.url && (tab.url.startsWith('chrome://') || tab.url === 'chrome://newtab/');
-      if (!isNativeTab) continue;
+    // Priority order: blacklist (0) > empty (1) > native (2) > web (3)
+    const priorityOrder = { 'empty': 1, 'native': 2, 'web': 3 };
+    
+    for (const tab of windowTabs) {
+      // Skip if active, audible
+      if (tab.active || tab.audible) continue;
       
+      // Skip pinned if protected
+      if (currentSettings.ignorePinnedTabs && tab.pinned) continue;
+      
+      // Check whitelist - never close whitelisted tabs
+      if (matchesPattern(tab.url, currentSettings.whitelist)) continue;
+      
+      // Check blacklist - highest priority (0)
+      if (matchesPattern(tab.url, currentSettings.blacklist)) {
+        const lastActive = Math.max(tab.lastAccessed || now, resumeTime);
+        candidates.push({
+          tab,
+          priority: 0,
+          lastActive,
+          reason: 'blacklist',
+          type: 'blacklist'
+        });
+        continue;
+      }
+      
+      // Get tab type
+      const tabType = getTabType(tab);
       const lastActive = Math.max(tab.lastAccessed || now, resumeTime);
       const idleTime = now - lastActive;
       
-      // Check if we should skip pinned tab based on settings
-      const shouldSkipPinned = currentSettings.ignorePinnedTabs && tab.pinned;
+      let shouldClose = false;
+      let reason = '';
       
-      if (idleTime > nativeIdleThreshold && !tab.active && !tab.audible && !shouldSkipPinned) {
-        // Only close if we are above minTabCount
-        if (currentTabCount > currentSettings.minTabCount) {
-          console.log(`Marking native tab for closing: ${tab.title}`);
-          tabsToClose.push(tab);
-          markedTabIds.add(tab.id);
-          currentTabCount--;
-        } else {
-          console.log(`Keeping native tab to maintain min count (${currentSettings.minTabCount}): ${tab.title}`);
+      // Empty tabs - always candidates (no idle time check needed)
+      if (tabType === 'empty') {
+        shouldClose = true;
+        reason = 'empty';
+      }
+      // Native tabs - check idle time and settings
+      else if (tabType === 'native') {
+        if (currentSettings.autoCloseNativeTabs && idleTime > nativeIdleThreshold) {
+          shouldClose = true;
+          reason = 'native_idle';
         }
       }
-    }
-  }
-  
-  // 2. Identify Duplicate Domains to close (Dependent on minTabCount)
-  if (currentSettings.closeDuplicateDomains) {
-    for (const domain in domainGroups) {
-      const domainTabs = domainGroups[domain];
-      
-      // If more than 3 tabs from same domain
-      if (domainTabs.length > 3) {
-        // Sort by last active time (oldest first)
-        domainTabs.sort((a, b) => a.lastActive - b.lastActive);
-        
-        // Candidates to close (keep only 2 most recent)
-        const candidates = domainTabs.slice(0, domainTabs.length - 2);
-        
-        for (const { tab } of candidates) {
-          // Skip if already marked
-          if (markedTabIds.has(tab.id)) continue;
-          
-          // Skip if in whitelist
-          if (matchesPattern(tab.url, currentSettings.whitelist)) continue;
-          
-          // Skip pinned if protected
-          if (currentSettings.ignorePinnedTabs && tab.pinned) continue;
-          
-          // Only close if we are above minTabCount
-          if (currentTabCount > currentSettings.minTabCount) {
-            console.log(`Marking duplicate domain tab (${domain}) for closing:`, tab.title);
-            tabsToClose.push(tab);
-            markedTabIds.add(tab.id);
-            currentTabCount--;
+      // Web pages - check idle time and duplicate domains
+      else if (tabType === 'web') {
+        // Check duplicate domains
+        if (currentSettings.closeDuplicateDomains) {
+          try {
+            const urlObj = new URL(tab.url);
+            const domain = urlObj.hostname;
+            
+            if (domainGroups[domain] && domainGroups[domain].length > 3) {
+              // Sort domain tabs by last active
+              const sortedDomainTabs = [...domainGroups[domain]].sort((a, b) => a.lastActive - b.lastActive);
+              
+              // Check if this tab is in the "to be closed" group (not in the 2 most recent)
+              const keepCount = 2;
+              const tabIndex = sortedDomainTabs.findIndex(dt => dt.tab.id === tab.id);
+              
+              if (tabIndex !== -1 && tabIndex < sortedDomainTabs.length - keepCount) {
+                shouldClose = true;
+                reason = 'duplicate_domain';
+              }
+            }
+          } catch (e) {
+            // Invalid URL, skip duplicate check
           }
         }
+        
+        // Check idle time (can override duplicate domain check)
+        if (!shouldClose && idleTime > idleThreshold) {
+          shouldClose = true;
+          reason = 'idle';
+        }
+      }
+      
+      if (shouldClose) {
+        candidates.push({
+          tab,
+          priority: priorityOrder[tabType] || 3,
+          lastActive,
+          reason,
+          type: tabType
+        });
       }
     }
-  }
-  
-  // 3. Identify Regular Idle Tabs to close (Dependent on minTabCount)
-  const regularCandidates = [];
-  
-  for (const tab of tabs) {
-    // Skip if already marked
-    if (markedTabIds.has(tab.id)) continue;
     
-    // Skip native tabs (handled above)
-    if (tab.url && (tab.url.startsWith('chrome://') || tab.url === 'chrome://newtab/')) continue;
+    // Sort candidates by priority first, then by idle time (oldest first)
+    candidates.sort((a, b) => {
+      // First sort by priority (lower number = higher priority)
+      if (a.priority !== b.priority) {
+        return a.priority - b.priority;
+      }
+      // Then by last active time (older first)
+      return a.lastActive - b.lastActive;
+    });
     
-    // Skip special extension URLs
-    if (tab.url && tab.url.startsWith('chrome-extension://')) continue;
+    // Close tabs until we reach minTabCount
+    // Reset variables
+    tabsToClose.length = 0;
+    currentTabCount = windowTabs.length;
     
-    // Skip if active, audible
-    if (tab.active || tab.audible) continue;
-    
-    // Skip pinned if protected
-    if (currentSettings.ignorePinnedTabs && tab.pinned) continue;
-    
-    // Check whitelist
-    if (matchesPattern(tab.url, currentSettings.whitelist)) continue;
-    
-    // Check blacklist - close immediately regardless of idle time or count
-    if (matchesPattern(tab.url, currentSettings.blacklist)) {
-      console.log('Tab in blacklist, marking for closing:', tab.url);
-      tabsToClose.push(tab);
-      markedTabIds.add(tab.id);
-      currentTabCount--;
-      continue;
+    for (const candidate of candidates) {
+      if (currentTabCount > currentSettings.minTabCount) {
+        console.log(`[Window ${windowId}] Marking ${candidate.type} tab for closing (${candidate.reason}): ${candidate.tab.title}`);
+        tabsToClose.push(candidate.tab);
+        currentTabCount--;
+      } else {
+        console.log(`[Window ${windowId}] Keeping ${candidate.type} tab to maintain min count (${currentSettings.minTabCount}): ${candidate.tab.title}`);
+        break;
+      }
     }
     
-    // Check idle time
-    const lastActive = Math.max(tab.lastAccessed || now, resumeTime);
-    const idleTime = now - lastActive;
+    // Safety Check: Ensure we don't close more than allowed in this window
+    // This is a final safeguard in case logic above had gaps
+    const projectedCount = windowTabs.length - tabsToClose.length;
+    if (projectedCount < currentSettings.minTabCount) {
+      const overflow = currentSettings.minTabCount - projectedCount;
+      if (overflow > 0) {
+        console.warn(`[Window ${windowId}] Safety check: Removing ${overflow} tabs from close list to respect minTabCount.`);
+        // Remove from the end (lowest priority tabs are added last)
+        tabsToClose.splice(-overflow);
+      }
+    }
     
-    if (idleTime > idleThreshold) {
-      regularCandidates.push({ tab, lastActive });
+    // Execute closing for this window
+    for (const tab of tabsToClose) {
+      await saveToHistory(tab);
+      await chrome.tabs.remove(tab.id);
     }
-  }
-  
-  // Sort candidates by last active time (oldest first)
-  regularCandidates.sort((a, b) => a.lastActive - b.lastActive);
-  
-  // Close candidates as long as we stay above minTabCount
-  for (const candidate of regularCandidates) {
-    if (currentTabCount > currentSettings.minTabCount) {
-      console.log('Marking idle tab for closing:', candidate.tab.title);
-      tabsToClose.push(candidate.tab);
-      markedTabIds.add(candidate.tab.id);
-      currentTabCount--;
-    } else {
-      console.log(`Keeping idle tab to maintain min count (${currentSettings.minTabCount}):`, candidate.tab.title);
-    }
-  }
-  
-  // Safety Check: Ensure we don't close more than allowed
-  // This is a final safeguard in case logic above had gaps
-  const projectedCount = tabs.length - tabsToClose.length;
-  if (projectedCount < currentSettings.minTabCount) {
-    const overflow = currentSettings.minTabCount - projectedCount;
-    if (overflow > 0) {
-      console.warn(`Safety check: Removing ${overflow} tabs from close list to respect minTabCount.`);
-      // Remove from the end (regular idle tabs are added last)
-      tabsToClose.splice(-overflow);
-    }
-  }
-  
-  // Execute closing
-  for (const tab of tabsToClose) {
-    await saveToHistory(tab);
-    await chrome.tabs.remove(tab.id);
+    
+    console.log(`[Window ${windowId}] Closed ${tabsToClose.length} tabs, ${windowTabs.length - tabsToClose.length} remaining`);
   }
 }
 
